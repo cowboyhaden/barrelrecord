@@ -263,8 +263,8 @@ def generate_qr_pdf(barrels_data, base_url):
         c.drawImage(qr_img, qr_x, qr_y, qr_size, qr_size)
 
         # Variety name
-        c.setFont("Helvetica-Bold", 12)
-        c.drawCentredString(page_w / 2, qr_y - 0.14 * inch, barrel["variety"])
+        c.setFont("Helvetica-Bold", 14)
+        c.drawCentredString(page_w / 2, qr_y - 0.10 * inch, barrel["variety"])
 
         # Barrel # and date
         c.setFont("Helvetica", 6)
