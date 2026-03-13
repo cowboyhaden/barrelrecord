@@ -34,7 +34,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -309,46 +309,43 @@ if qr_param:
 
         st.markdown("---")
 
-        try:
-            product_options = get_products(spreadsheet)
-        except Exception as e:
-            show_error_and_stop(f"Could not load products: {e}")
-
-        # Use st.form to prevent double-submits
-        with st.form("withdrawal_form"):
-            product_type = st.selectbox("Product Type", product_options)
-            weight_lbs = st.number_input(
-                "Weight (lbs)", min_value=0.0, step=0.1, format="%.1f"
-            )
-            notes = st.text_input("Notes (optional)")
-            submitted = st.form_submit_button("Record Withdrawal", use_container_width=True)
-
-        if submitted:
-            if weight_lbs <= 0:
-                st.warning("Please enter a weight greater than 0.")
-            else:
-                try:
-                    record_withdrawal(
-                        spreadsheet,
-                        barrel["barrel_id"],
-                        qr_param,
-                        product_type,
-                        weight_lbs,
-                        notes,
-                    )
-                    st.success(
-                        f"Recorded {weight_lbs:.1f} lbs of **{product_type}** "
-                        f"from barrel **{barrel['barrel_id']}**."
-                    )
-                    st.balloons()
-                    st.session_state["last_withdrawal_done"] = True
-                except Exception as e:
-                    show_error_and_stop(f"Failed to save withdrawal: {e}")
-
         if st.session_state.get("last_withdrawal_done"):
+            st.success("Withdrawal recorded!")
             if st.button("Record Another Withdrawal", use_container_width=True):
                 st.session_state["last_withdrawal_done"] = False
                 st.rerun()
+        else:
+            try:
+                product_options = get_products(spreadsheet)
+            except Exception as e:
+                show_error_and_stop(f"Could not load products: {e}")
+
+            with st.form("withdrawal_form"):
+                product_type = st.selectbox("Product Type", product_options)
+                weight_lbs = st.number_input(
+                    "Weight (lbs)", min_value=0.0, step=0.1, format="%.1f"
+                )
+                notes = st.text_input("Notes (optional)")
+                submitted = st.form_submit_button("Record Withdrawal", use_container_width=True)
+
+            if submitted:
+                if weight_lbs <= 0:
+                    st.warning("Please enter a weight greater than 0.")
+                else:
+                    try:
+                        record_withdrawal(
+                            spreadsheet,
+                            barrel["barrel_id"],
+                            qr_param,
+                            product_type,
+                            weight_lbs,
+                            notes,
+                        )
+                        st.session_state["last_withdrawal_done"] = True
+                        st.balloons()
+                        st.rerun()
+                    except Exception as e:
+                        show_error_and_stop(f"Failed to save withdrawal: {e}")
 
         st.markdown("---")
         if st.button("Reassign this QR to a different barrel", use_container_width=True):
