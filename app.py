@@ -34,11 +34,12 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
 VARIETIES_SHEET = "varieties"
+PRODUCTS_SHEET = "products"
 
 BARRELS_HEADERS = [
     "barrel_id",
@@ -213,6 +214,19 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
         raise RuntimeError(f"Failed to reassign QR code: {e}") from e
 
 
+def get_products(spreadsheet):
+    """Return sorted list of product types from the products tab."""
+    try:
+        ws = spreadsheet.worksheet(PRODUCTS_SHEET)
+        values = ws.col_values(1)
+        names = [v.strip() for v in values if v.strip()]
+        if names and names[0].lower() in ("product", "product_type", "products", "name"):
+            names = names[1:]
+        return names
+    except gspread.exceptions.APIError as e:
+        raise RuntimeError(f"Failed to read products sheet: {e}") from e
+
+
 def get_varieties(spreadsheet):
     """Return sorted list of variety names from the varieties tab."""
     try:
@@ -270,8 +284,6 @@ qr_param = st.query_params.get("qr", None)
 # WORKFLOW 2 & 3: QR SCAN
 # ==================================================
 if qr_param:
-    st.title("☕ Coffee Barrel Tracker")
-
     try:
         spreadsheet = get_spreadsheet()
     except Exception as e:
@@ -290,26 +302,29 @@ if qr_param:
         # ----------------------------------------
         # WORKFLOW 2: Record a withdrawal
         # ----------------------------------------
-        st.subheader("Barrel Info")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Variety", barrel["variety"])
-        col2.metric("Date Created", barrel["date_created"])
-        col3.metric("Barrel #", barrel["barrel_number"])
+        st.title(barrel["variety"])
+        col1, col2 = st.columns(2)
+        col1.metric("Date Created", barrel["date_created"])
+        col2.metric("Barrel #", barrel["barrel_number"])
 
         st.markdown("---")
-        st.subheader("Record Withdrawal")
+
+        try:
+            product_options = get_products(spreadsheet)
+        except Exception as e:
+            show_error_and_stop(f"Could not load products: {e}")
 
         # Use st.form to prevent double-submits
         with st.form("withdrawal_form"):
-            product_type = st.selectbox("Product Type", PRODUCT_TYPES)
-            weight_oz = st.number_input(
-                "Weight (oz)", min_value=0.0, step=0.1, format="%.1f"
+            product_type = st.selectbox("Product Type", product_options)
+            weight_lbs = st.number_input(
+                "Weight (lbs)", min_value=0.0, step=0.1, format="%.1f"
             )
             notes = st.text_input("Notes (optional)")
             submitted = st.form_submit_button("Record Withdrawal", use_container_width=True)
 
         if submitted:
-            if weight_oz <= 0:
+            if weight_lbs <= 0:
                 st.warning("Please enter a weight greater than 0.")
             else:
                 try:
@@ -318,11 +333,11 @@ if qr_param:
                         barrel["barrel_id"],
                         qr_param,
                         product_type,
-                        weight_oz,
+                        weight_lbs,
                         notes,
                     )
                     st.success(
-                        f"Recorded {weight_oz:.1f} oz of **{product_type}** "
+                        f"Recorded {weight_lbs:.1f} lbs of **{product_type}** "
                         f"from barrel **{barrel['barrel_id']}**."
                     )
                     st.balloons()
