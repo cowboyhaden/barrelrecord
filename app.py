@@ -14,6 +14,9 @@ import qrcode
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from PIL import Image
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 # ============================
 # 2. CONFIGURATION CONSTANTS
@@ -34,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -239,6 +242,43 @@ def get_varieties(spreadsheet):
         return sorted(names)
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to read varieties sheet: {e}") from e
+
+
+def generate_qr_pdf(barrels_data, base_url):
+    """Generate a PDF with one 2x1.5 inch QR label per page."""
+    buf = io.BytesIO()
+    page_w = 2.0 * inch
+    page_h = 1.5 * inch
+    c = canvas.Canvas(buf, pagesize=(page_w, page_h))
+
+    for barrel in barrels_data:
+        qr_buf = build_qr_image(barrel["qr_code_id"], base_url)
+        qr_img = ImageReader(qr_buf)
+
+        # QR code: 1.1" square, centered horizontally, top-aligned with margin
+        qr_size = 1.1 * inch
+        qr_x = (page_w - qr_size) / 2
+        qr_y = page_h - qr_size - 0.05 * inch
+
+        c.drawImage(qr_img, qr_x, qr_y, qr_size, qr_size)
+
+        # Variety name
+        c.setFont("Helvetica-Bold", 7)
+        c.drawCentredString(page_w / 2, qr_y - 0.14 * inch, barrel["variety"])
+
+        # Barrel # and date
+        c.setFont("Helvetica", 6)
+        c.drawCentredString(
+            page_w / 2,
+            qr_y - 0.26 * inch,
+            f"Barrel #{barrel['barrel_number']}  |  {barrel['date_created']}",
+        )
+
+        c.showPage()
+
+    c.save()
+    buf.seek(0)
+    return buf
 
 
 def build_qr_image(qr_code_id, base_url):
@@ -504,20 +544,39 @@ else:
         if df.empty:
             st.info("No barrels registered yet.")
         else:
-            active_df = df[df["status"] == "active"].copy()
+            active_df = df[df["status"] == "active"].copy().reset_index(drop=True)
 
             variety_filter = st.text_input("Filter by variety", key="filter_variety")
             if variety_filter.strip():
                 active_df = active_df[
                     active_df["variety"].str.contains(variety_filter.strip(), case=False, na=False)
-                ]
+                ].reset_index(drop=True)
 
-            st.dataframe(
-                active_df[["barrel_id", "variety", "date_created", "barrel_number", "qr_code_id", "assigned_date"]],
+            display_cols = ["barrel_id", "variety", "date_created", "barrel_number", "qr_code_id", "assigned_date"]
+            selection = st.dataframe(
+                active_df[display_cols],
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun",
+                selection_mode="multi-row",
             )
             st.caption(f"{len(active_df)} active barrel(s) shown.")
+
+            selected_rows = selection.selection.rows
+            if selected_rows:
+                selected_barrels = active_df.iloc[selected_rows].to_dict("records")
+                base_url = st.secrets["app"]["base_url"]
+                try:
+                    pdf_buf = generate_qr_pdf(selected_barrels, base_url)
+                    st.download_button(
+                        label=f"Download QR Labels PDF ({len(selected_rows)} selected)",
+                        data=pdf_buf,
+                        file_name="barrel_qr_labels.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"Could not generate PDF: {e}")
 
     st.markdown("---")
     st.caption(f"v{APP_VERSION}")
