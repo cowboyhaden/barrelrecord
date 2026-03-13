@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "barrel-record",
+  "private_key_id": "f7c40eeb7533396e3d05eca826840ed4d551157f",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQChI4dICSvDOl8j\nMbA9A5PbbuE3qcB/jmTzLFVQ+F2WzlpBRorJk0gWTzNe9zVCVOXy/yiuSG3hIyh8\nmleo3QJGIH3K2JdLXjmWKb4Q860Hq1uRSr1X2JdFFvQi7T9iauIqmR/B0XOVqnNx\nmVDYgk/j68p0QUOrF30CgN91qnu9SiEtga3W5RF9iRQ70ZRFX8WFEogCpi5/rDr4\nFVKzmaIPnESzflNH7sUnNz0vFk7l+vY4LK3YVqsntZI/2QaqwQ/3YSUjhF6/d4gr\nq0e2mvmkyQTyMbmvQgyGYA+raHJYmnds6hXdS0qJsAPj8fE0VRz/wXNuinvgspai\nuYiFLMf7AgMBAAECggEAShMaCkxk+L8povUhjjrJypLjJ4J6gmjEEWFs6ubxpvS/\nWsiB3n49IjxQYjSEIDUE7DrNyah0Eo3l+7m72F2YwQIIsan1iukK0fPocsSB40er\ntVPFTM+9Yj5WBoRHogd+ZpSzm5acas3Lego/tvfYn+7xx5WE9O68Qd1aXC396hqh\n6H1Z3ESZq62YuMId31SfFWmigGsxCRH4048Etls7qphyJD22VGPtgmSTEHAMswcm\nGH8w+aHvFoGOrwnL73vGUSNjgz9qvsaQe8eSWUFkLatbsNuy2VHNV56Ms/5RlW1P\nx9PEfhlPlllVn+ktSl7qab9129oC1T8WdUowxOJS6QKBgQDRhv9t0fRoOD0w4K4S\nnwHrvb9+PJAuQT+ID5DmurIHmjU0V5LobZcdpzP3/qQCGu49E3KK1V2Qdopqj61D\nCjDnsnvFnd+ifCR/4gQ4gyRiJi7FZsIm/797fM0FoJLQJ1wdi8RIWiNiX7c2Dp74\n1jcb/PYwhRs2AUx0eLSFjxrS1QKBgQDE4QT4cwLP5bdB4tn3BSaFVw0WsHZ3turI\nmPdfLA0AAxQBImtQmF3gDkZeu3ICiLh4iFSqb4CLy/SMo+e53IGGy2UMiApUdSRJ\nQ5xInFTWKX0H/t6CLv2LEZRuGBlEhQUaRF3fyGTgzLSc6XKR9hc7v15WSH7pJ9+l\n8k4sYHB3jwKBgQCBKliyibjCutC2HfwRjKZxfmLbXlh/u0eACCCKrFLtrtnXr5jn\n4g9Df3zhB8Bxb8qoKiH1hj0MvpbrxDDKYDDv1K7Kj1163E7f6yQw9l9qhiFVHdjY\nk9amOLRnIKsA2RLHQA87jx27GkhmcbL8sYn9nf7iwFua+kf4kSSwJR0jFQKBgC5h\nUDlzZrMxS6Wy2mROC1AYPNYehhoXtmHBX21FRF6/WuQVhrB65IqW8k7425frO4Hx\no/huwhqs1pSXPEzVvJHTsp9sIPraiczUp6mXYoj9Rx4uFZ8XkNVFM/FnrfQtXhFd\nD7xbSiCHOPlKKZpnHfwOThwHghZNNWuzlGTx5yzTAoGAGjO7taB5B9xbgiJf99wd\nnwNsCiTh7PaY8D7UhW3YNqg7EBX7ZuuJJvR8FrMAVIsy5wJIkSlxJIdac/PuCqlW\nI0GC96JuQUO6jA6Ac5osElh5AnwXlaQ74DnGp6W7TJHzMtH+etnVLXUBzYPOaCkk\nSFqiCN5stxmCw1W2qeK2jT8=\n-----END PRIVATE KEY-----\n",
+  "client_email": "barrelrecord@barrel-record.iam.gserviceaccount.com",
+  "client_id": "117905760099002196269",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/barrelrecord%40barrel-record.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
