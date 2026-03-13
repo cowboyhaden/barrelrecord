@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
