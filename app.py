@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
@@ -429,10 +429,13 @@ if qr_param:
             )
 
             # Destination QR — live scanner or manual entry.
-            # Show the scanner until the text input has a value.
-            # We set st.session_state["transfer_dest_qr_input"] directly so the
-            # keyed text_input picks it up on the next render (passing value= only
-            # works on first render once a widget owns its session state slot).
+            # Streamlit forbids modifying a widget's session state key after it has
+            # been instantiated in the same run.  Button handlers that need to clear
+            # the field set a deferred flag instead; we process it here, before the
+            # text_input is rendered, so the modification is always pre-instantiation.
+            if st.session_state.pop("_clear_dest_qr_input", False):
+                st.session_state["transfer_dest_qr_input"] = ""
+
             if not st.session_state.get("transfer_dest_qr_input"):
                 scanned = _qr_scanner(key="qr_live_scanner", default=None)
                 if scanned:
@@ -483,7 +486,7 @@ if qr_param:
                                 notes_str,
                             )
                             st.session_state["barrel_transfer_mode"] = False
-                            st.session_state["transfer_dest_qr_input"] = ""
+                            st.session_state["_clear_dest_qr_input"] = True
                             st.session_state["last_transfer_done"] = {
                                 "dest_variety": dest_barrel["variety"],
                                 "dest_barrel_number": dest_barrel["barrel_number"],
@@ -495,7 +498,7 @@ if qr_param:
 
             if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
-                st.session_state["transfer_dest_qr_input"] = ""
+                st.session_state["_clear_dest_qr_input"] = True
                 st.rerun()
 
         elif st.session_state.get("last_transfer_done"):
