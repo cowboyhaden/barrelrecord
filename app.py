@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -509,19 +509,25 @@ else:
     # Tab: Generate QR Code
     # --------------------------------------------------
     with tab_generate:
-        if st.button("Generate QR Code", use_container_width=True):
-            try:
-                qr_code_id = generate_unique_qr_id(spreadsheet)
-                register_qr_code(spreadsheet, qr_code_id)
-                qr_buf = build_qr_image(qr_code_id, base_url)
-                if "generated_qrs" not in st.session_state:
-                    st.session_state["generated_qrs"] = []
-                st.session_state["generated_qrs"].append({
-                    "qr_code_id": qr_code_id,
-                    "qr_png": qr_buf.getvalue(),
-                })
-            except Exception as e:
-                st.error(f"Error generating QR code: {e}")
+        qty = st.number_input("Quantity", min_value=1, max_value=50, value=1, step=1)
+
+        if st.button("Generate QR Code(s)", use_container_width=True):
+            if "generated_qrs" not in st.session_state:
+                st.session_state["generated_qrs"] = []
+            errors = []
+            for _ in range(int(qty)):
+                try:
+                    qr_code_id = generate_unique_qr_id(spreadsheet)
+                    register_qr_code(spreadsheet, qr_code_id)
+                    qr_buf = build_qr_image(qr_code_id, base_url)
+                    st.session_state["generated_qrs"].append({
+                        "qr_code_id": qr_code_id,
+                        "qr_png": qr_buf.getvalue(),
+                    })
+                except Exception as e:
+                    errors.append(str(e))
+            if errors:
+                st.error(f"Some codes failed to generate: {'; '.join(errors)}")
 
         generated = st.session_state.get("generated_qrs", [])
         if generated:
