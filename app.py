@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -76,15 +76,18 @@ def get_gsheet_client():
     return gspread.authorize(creds)
 
 
+@st.cache_resource(show_spinner=False)
 def get_spreadsheet():
+    """Cached spreadsheet connection — reused across reruns."""
     client = get_gsheet_client()
     return client.open_by_key(st.secrets["sheets"]["spreadsheet_id"])
 
 
-def get_barrels_df(spreadsheet):
-    """Return barrels tab as a DataFrame. Returns empty DataFrame on error."""
+@st.cache_data(ttl=120, show_spinner=False)
+def get_barrels_df(_spreadsheet):
+    """Return barrels tab as a DataFrame. Cached for 120 s; clear after writes."""
     try:
-        ws = spreadsheet.worksheet(BARRELS_SHEET)
+        ws = _spreadsheet.worksheet(BARRELS_SHEET)
         records = ws.get_all_records()
         if not records:
             return pd.DataFrame(columns=BARRELS_HEADERS)
@@ -234,10 +237,11 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
         raise RuntimeError(f"Failed to reassign QR code: {e}") from e
 
 
-def get_products(spreadsheet):
-    """Return sorted list of product types from the products tab."""
+@st.cache_data(ttl=300, show_spinner=False)
+def get_products(_spreadsheet):
+    """Return product types from the products tab. Cached for 5 min."""
     try:
-        ws = spreadsheet.worksheet(PRODUCTS_SHEET)
+        ws = _spreadsheet.worksheet(PRODUCTS_SHEET)
         values = ws.col_values(1)
         names = [v.strip() for v in values if v.strip()]
         if names and names[0].lower() in ("product", "product_type", "products", "name"):
@@ -247,12 +251,12 @@ def get_products(spreadsheet):
         raise RuntimeError(f"Failed to read products sheet: {e}") from e
 
 
-def get_varieties(spreadsheet):
-    """Return sorted list of variety names from the varieties tab."""
+@st.cache_data(ttl=300, show_spinner=False)
+def get_varieties(_spreadsheet):
+    """Return variety names from the varieties tab. Cached for 5 min."""
     try:
-        ws = spreadsheet.worksheet(VARIETIES_SHEET)
-        values = ws.col_values(1)  # first column
-        # Drop header row if present
+        ws = _spreadsheet.worksheet(VARIETIES_SHEET)
+        values = ws.col_values(1)
         names = [v.strip() for v in values if v.strip()]
         if names and names[0].lower() in ("variety", "varieties", "name"):
             names = names[1:]
@@ -482,6 +486,7 @@ if qr_param:
                     new_date_str,
                     int(barrel_num),
                 )
+                get_barrels_df.clear()
                 st.success(f"QR code assigned to new barrel **{new_barrel_id}**.")
                 st.session_state["force_reassign"] = False
                 st.rerun()
@@ -515,9 +520,25 @@ else:
             if "generated_qrs" not in st.session_state:
                 st.session_state["generated_qrs"] = []
             errors = []
+            # Single sheet read for uniqueness check across the whole batch
+            try:
+                _df = get_barrels_df(spreadsheet)
+                existing_ids = set(_df["qr_code_id"].tolist()) if not _df.empty else set()
+            except Exception:
+                existing_ids = set()
             for _ in range(int(qty)):
                 try:
-                    qr_code_id = generate_unique_qr_id(spreadsheet)
+                    # Generate unique ID using in-memory set (no extra reads)
+                    qr_code_id = None
+                    for __ in range(20):
+                        candidate = "QR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                        if candidate not in existing_ids:
+                            qr_code_id = candidate
+                            break
+                    if not qr_code_id:
+                        errors.append("Could not generate a unique ID")
+                        continue
+                    existing_ids.add(qr_code_id)
                     register_qr_code(spreadsheet, qr_code_id)
                     qr_buf = build_qr_image(qr_code_id, base_url)
                     st.session_state["generated_qrs"].append({
@@ -526,6 +547,7 @@ else:
                     })
                 except Exception as e:
                     errors.append(str(e))
+            get_barrels_df.clear()  # invalidate cache once after all writes
             if errors:
                 st.error(f"Some codes failed to generate: {'; '.join(errors)}")
 
@@ -672,6 +694,7 @@ else:
                         new_date_str,
                         int(new_barrel_num),
                     )
+                    get_barrels_df.clear()
                     st.success(f"QR **{current['qr_code_id']}** reassigned to new barrel **{new_barrel_id}**.")
                     st.rerun()
                 except Exception as e:
