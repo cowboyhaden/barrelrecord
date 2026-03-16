@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: transparent; font-family: sans-serif; }
+        #container { padding: 4px; }
+        #notice {
+            font-size: 12px;
+            color: #aaa;
+            padding: 0 2px 6px;
+            line-height: 1.4;
+        }
+        video { width: 100%; border-radius: 8px; display: block; }
+        #status {
+            text-align: center;
+            padding: 8px 4px 4px;
+            font-size: 13px;
+            color: #888;
+        }
+        #status.found { color: #21c354; }
+        #status.error { color: #f44336; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <p id="notice">
+            Camera is used only to read the QR code printed on the barrel label.
+            Video is processed locally in your browser and is never stored or transmitted.
+        </p>
+        <video id="video" playsinline autoplay muted></video>
+        <p id="status">Initializing camera...</p>
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+
+    <!-- jsQR vendored locally — no CDN dependency -->
+    <script src="jsQR.min.js"></script>
+    <script>
+        // Lock postMessage to the Streamlit app's origin (same host).
+        // window.location.origin is the component's own origin, which Streamlit
+        // serves from the same host as the parent app.
+        var STREAMLIT_ORIGIN = window.location.origin;
+
+        function postToStreamlit(type, extra) {
+            window.parent.postMessage(
+                Object.assign({ isStreamlitMessage: true, type: type }, extra),
+                STREAMLIT_ORIGIN
+            );
+        }
+
+        function setHeight() {
+            postToStreamlit("streamlit:setFrameHeight", {
+                height: document.getElementById("container").scrollHeight + 16
+            });
+        }
+
+        function setValue(value) {
+            postToStreamlit("streamlit:setComponentValue", {
+                value: value,
+                dataType: "json"
+            });
+        }
+
+        // Validate that the extracted value looks like a QR code ID or app URL before returning it.
+        function extractQrId(raw) {
+            // Accept a full app URL and extract the qr param
+            if (raw.indexOf("?qr=") !== -1) {
+                raw = raw.split("?qr=")[1].split("&")[0];
+            }
+            // Only accept QR-XXXXXX format (alphanumeric after QR-)
+            if (/^QR-[A-Z0-9]{4,10}$/i.test(raw)) {
+                return raw.toUpperCase();
+            }
+            return null;
+        }
+
+        // Signal to Streamlit that the component is ready
+        postToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+
+        var video = document.getElementById("video");
+        var canvas = document.getElementById("canvas");
+        var ctx = canvas.getContext("2d");
+        var status = document.getElementById("status");
+        var found = false;
+
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        })
+        .then(function(stream) {
+            video.srcObject = stream;
+            video.play();
+            status.textContent = "🔍 Scanning — hold QR code steady...";
+            setHeight();
+            requestAnimationFrame(scan);
+        })
+        .catch(function(err) {
+            status.className = "error";
+            // Show a user-friendly message without leaking internal error details
+            status.textContent = "Could not access camera. Please allow camera permission and try again.";
+            setHeight();
+        });
+
+        function scan() {
+            if (found) return;
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0);
+                var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                var code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert"
+                });
+                if (code) {
+                    var val = extractQrId(code.data);
+                    if (val) {
+                        found = true;
+                        // Stop the camera
+                        video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+                        video.style.display = "none";
+                        status.className = "found";
+                        status.textContent = "✅ Detected: " + val;
+                        setHeight();
+                        setValue(val);
+                        return;
+                    }
+                    // QR code found but not in expected format — keep scanning
+                }
+            }
+            requestAnimationFrame(scan);
+        }
+    </script>
+</body>
+</html>
