@@ -3,15 +3,19 @@
 # ============================
 
 import io
-import random
+import os
+import re
+import secrets
 import string
 import uuid
 from datetime import date, datetime
+
 
 import gspread
 import pandas as pd
 import qrcode
 import streamlit as st
+import streamlit.components.v1 as components
 from google.oauth2.service_account import Credentials
 from PIL import Image
 from reportlab.lib.units import inch
@@ -37,7 +41,10 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.4.0"
+
+# Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
+_QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -147,8 +154,9 @@ def generate_unique_qr_id(spreadsheet):
     except Exception:
         existing = set()
 
+    alphabet = string.ascii_uppercase + string.digits
     for _ in range(20):
-        candidate = "QR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        candidate = "QR-" + "".join(secrets.choice(alphabet) for _ in range(6))
         if candidate not in existing:
             return candidate
     raise RuntimeError("Could not generate a unique QR code ID after 20 attempts.")
@@ -330,20 +338,6 @@ def generate_blank_qr_pdf(qr_items, base_url):
     return buf
 
 
-def decode_qr_from_image(img_file):
-    """Decode a QR code from a camera/uploaded image. Returns the decoded string or None."""
-    try:
-        import cv2
-        import numpy as np
-        img = Image.open(img_file).convert("RGB")
-        img_array = np.array(img)
-        detector = cv2.QRCodeDetector()
-        data, _, _ = detector.detectAndDecode(img_array)
-        return data.strip() if data else None
-    except Exception:
-        return None
-
-
 def build_qr_image(qr_code_id, base_url):
     """Generate a QR code PNG (BytesIO) encoding the app URL for the given QR ID."""
     url = f"{base_url.rstrip('/')}/?qr={qr_code_id}"
@@ -366,6 +360,9 @@ def build_qr_image(qr_code_id, base_url):
 # 4. STREAMLIT UI CODE
 # ============================
 
+_QR_SCANNER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qr_scanner_component")
+_qr_scanner = components.declare_component("qr_scanner", path=_QR_SCANNER_DIR)
+
 st.set_page_config(
     page_title="Coffee Barrel Tracker",
     page_icon="☕",
@@ -382,6 +379,13 @@ def show_error_and_stop(message):
 # Route: determine if this is an admin or scan visit
 # --------------------------------------------------
 qr_param = st.query_params.get("qr", None)
+
+# Reject malformed QR params before doing any sheet lookups
+if qr_param and not _QR_ID_RE.match(qr_param.upper()):
+    show_error_and_stop("Invalid QR code format.")
+
+if qr_param:
+    qr_param = qr_param.upper()
 
 # ==================================================
 # WORKFLOW 2 & 3: QR SCAN
@@ -424,34 +428,20 @@ if qr_param:
                 f"(Barrel #{barrel['barrel_number']}) to another barrel."
             )
 
-            # Destination QR input + camera scan button
-            input_col, cam_col = st.columns([5, 1])
-            with input_col:
-                dest_qr = st.text_input(
-                    "Destination Barrel QR Code",
-                    value=st.session_state.get("transfer_dest_qr_val", ""),
-                    placeholder="e.g. QR-A7X3B2",
-                    key="transfer_dest_qr_input",
-                )
-                st.session_state["transfer_dest_qr_val"] = dest_qr
-            with cam_col:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("📷", key="open_cam_btn", help="Scan QR code with camera"):
-                    st.session_state["show_transfer_camera"] = not st.session_state.get("show_transfer_camera", False)
+            # Destination QR — live scanner or manual entry
+            if not st.session_state.get("transfer_dest_qr_val"):
+                scanned = _qr_scanner(key="qr_live_scanner", default=None)
+                if scanned:
+                    st.session_state["transfer_dest_qr_val"] = scanned
                     st.rerun()
 
-            if st.session_state.get("show_transfer_camera"):
-                cam_img = st.camera_input("Point camera at destination barrel's QR code", key="transfer_cam")
-                if cam_img:
-                    decoded = decode_qr_from_image(cam_img)
-                    if decoded:
-                        if "?qr=" in decoded:
-                            decoded = decoded.split("?qr=")[-1].strip()
-                        st.session_state["transfer_dest_qr_val"] = decoded
-                        st.session_state["show_transfer_camera"] = False
-                        st.rerun()
-                    else:
-                        st.warning("No QR code detected — try again or enter the code manually.")
+            dest_qr = st.text_input(
+                "Destination Barrel QR Code",
+                value=st.session_state.get("transfer_dest_qr_val", ""),
+                placeholder="Scan above or type manually — e.g. QR-A7X3B2",
+                key="transfer_dest_qr_input",
+            )
+            st.session_state["transfer_dest_qr_val"] = dest_qr
 
             transfer_notes = st.text_input("Notes (optional)", key="transfer_notes_input")
 
@@ -490,7 +480,6 @@ if qr_param:
                             )
                             st.session_state["barrel_transfer_mode"] = False
                             st.session_state["transfer_dest_qr_val"] = ""
-                            st.session_state["show_transfer_camera"] = False
                             st.session_state["last_transfer_done"] = {
                                 "dest_variety": dest_barrel["variety"],
                                 "dest_barrel_number": dest_barrel["barrel_number"],
@@ -503,7 +492,6 @@ if qr_param:
             if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
                 st.session_state["transfer_dest_qr_val"] = ""
-                st.session_state["show_transfer_camera"] = False
                 st.rerun()
 
         elif st.session_state.get("last_transfer_done"):
@@ -538,6 +526,8 @@ if qr_param:
             if submitted:
                 if weight_lbs <= 0:
                     st.warning("Please enter a weight greater than 0.")
+                elif len(notes) > 500:
+                    st.warning("Notes must be 500 characters or fewer.")
                 else:
                     try:
                         record_withdrawal(
@@ -546,7 +536,7 @@ if qr_param:
                             qr_param,
                             product_type,
                             weight_lbs,
-                            notes,
+                            notes[:500],
                         )
                         st.session_state["last_withdrawal_done"] = True
                         st.balloons()
@@ -563,6 +553,7 @@ if qr_param:
                 st.session_state["barrel_transfer_mode"] = True
                 st.session_state["last_withdrawal_done"] = False
                 st.session_state["last_transfer_done"] = None
+                st.session_state["transfer_dest_qr_val"] = ""
                 st.rerun()
 
     else:
@@ -655,7 +646,7 @@ else:
                     # Generate unique ID using in-memory set (no extra reads)
                     qr_code_id = None
                     for __ in range(20):
-                        candidate = "QR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                        candidate = "QR-" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
                         if candidate not in existing_ids:
                             qr_code_id = candidate
                             break
