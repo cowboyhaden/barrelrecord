@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -330,6 +330,20 @@ def generate_blank_qr_pdf(qr_items, base_url):
     return buf
 
 
+def decode_qr_from_image(img_file):
+    """Decode a QR code from a camera/uploaded image. Returns the decoded string or None."""
+    try:
+        import cv2
+        import numpy as np
+        img = Image.open(img_file).convert("RGB")
+        img_array = np.array(img)
+        detector = cv2.QRCodeDetector()
+        data, _, _ = detector.detectAndDecode(img_array)
+        return data.strip() if data else None
+    except Exception:
+        return None
+
+
 def build_qr_image(qr_code_id, base_url):
     """Generate a QR code PNG (BytesIO) encoding the app URL for the given QR ID."""
     url = f"{base_url.rstrip('/')}/?qr={qr_code_id}"
@@ -410,35 +424,52 @@ if qr_param:
                 f"(Barrel #{barrel['barrel_number']}) to another barrel."
             )
 
-            with st.form("transfer_form"):
+            # Destination QR input + camera scan button
+            input_col, cam_col = st.columns([5, 1])
+            with input_col:
                 dest_qr = st.text_input(
                     "Destination Barrel QR Code",
+                    value=st.session_state.get("transfer_dest_qr_val", ""),
                     placeholder="e.g. QR-A7X3B2",
-                    help="Enter or scan the QR code printed on the destination barrel label.",
+                    key="transfer_dest_qr_input",
                 )
-                transfer_weight = st.number_input(
-                    "Weight transferred (lbs)", min_value=0.0, step=0.1, format="%.1f"
-                )
-                transfer_notes = st.text_input("Notes (optional)")
-                transfer_submitted = st.form_submit_button("Record Transfer", use_container_width=True)
+                st.session_state["transfer_dest_qr_val"] = dest_qr
+            with cam_col:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("📷", key="open_cam_btn", help="Scan QR code with camera"):
+                    st.session_state["show_transfer_camera"] = not st.session_state.get("show_transfer_camera", False)
+                    st.rerun()
 
-            if transfer_submitted:
-                dest_qr = dest_qr.strip()
-                if not dest_qr:
+            if st.session_state.get("show_transfer_camera"):
+                cam_img = st.camera_input("Point camera at destination barrel's QR code", key="transfer_cam")
+                if cam_img:
+                    decoded = decode_qr_from_image(cam_img)
+                    if decoded:
+                        if "?qr=" in decoded:
+                            decoded = decoded.split("?qr=")[-1].strip()
+                        st.session_state["transfer_dest_qr_val"] = decoded
+                        st.session_state["show_transfer_camera"] = False
+                        st.rerun()
+                    else:
+                        st.warning("No QR code detected — try again or enter the code manually.")
+
+            transfer_notes = st.text_input("Notes (optional)", key="transfer_notes_input")
+
+            if st.button("Record Transfer", use_container_width=True, key="record_transfer_btn"):
+                dest_qr_final = st.session_state.get("transfer_dest_qr_val", "").strip()
+                if not dest_qr_final:
                     st.warning("Please enter the destination barrel's QR code.")
-                elif dest_qr == qr_param:
+                elif dest_qr_final == qr_param:
                     st.warning("Destination barrel cannot be the same as the source barrel.")
-                elif transfer_weight <= 0:
-                    st.warning("Please enter a weight greater than 0.")
                 else:
                     try:
-                        dest_barrel = find_active_barrel(spreadsheet, dest_qr)
+                        dest_barrel = find_active_barrel(spreadsheet, dest_qr_final)
                     except Exception as e:
                         show_error_and_stop(f"Error looking up destination barrel: {e}")
 
                     if dest_barrel is None:
                         st.error(
-                            f"No active barrel found for QR code **{dest_qr}**. "
+                            f"No active barrel found for QR code **{dest_qr_final}**. "
                             "Check the code and try again."
                         )
                     else:
@@ -454,28 +485,31 @@ if qr_param:
                                 barrel["barrel_id"],
                                 qr_param,
                                 "Barrel Transfer",
-                                transfer_weight,
+                                0,
                                 notes_str,
                             )
                             st.session_state["barrel_transfer_mode"] = False
+                            st.session_state["transfer_dest_qr_val"] = ""
+                            st.session_state["show_transfer_camera"] = False
                             st.session_state["last_transfer_done"] = {
                                 "dest_variety": dest_barrel["variety"],
                                 "dest_barrel_number": dest_barrel["barrel_number"],
-                                "weight": transfer_weight,
                             }
                             st.balloons()
                             st.rerun()
                         except Exception as e:
                             show_error_and_stop(f"Failed to record transfer: {e}")
 
-            if st.button("Cancel Transfer", use_container_width=True):
+            if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
+                st.session_state["transfer_dest_qr_val"] = ""
+                st.session_state["show_transfer_camera"] = False
                 st.rerun()
 
         elif st.session_state.get("last_transfer_done"):
             info = st.session_state["last_transfer_done"]
             st.success(
-                f"Transfer recorded — {info['weight']} lbs moved to "
+                f"Transfer recorded — remainder moved to "
                 f"**{info['dest_variety']}** Barrel #{info['dest_barrel_number']}."
             )
             if st.button("Done", use_container_width=True):
