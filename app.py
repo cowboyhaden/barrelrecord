@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -256,23 +256,24 @@ def generate_qr_pdf(barrels_data, base_url):
         qr_img = ImageReader(qr_buf)
 
         # QR code: 1.1" square, centered horizontally, top-aligned with margin
-        qr_size = 1.1 * inch
+        qr_size = 1.2 * inch
         qr_x = (page_w - qr_size) / 2
-        qr_y = page_h - qr_size - 0.05 * inch
+        qr_y = (page_h - qr_size) / 2
 
         c.drawImage(qr_img, qr_x, qr_y, qr_size, qr_size)
 
         # Variety name
-        c.setFont("Helvetica-Bold", 14)
-        c.drawCentredString(page_w / 2, qr_y - 0.10 * inch, barrel["variety"])
+        #c.setFont("Helvetica-Bold", 14)
+        #c.drawCentredString(page_w / 2, qr_y - 0.10 * inch, barrel["variety"])
 
         # Barrel # and date
-        c.setFont("Helvetica", 6)
-        c.drawCentredString(
-            page_w / 2,
-            qr_y - 0.26 * inch,
-            f"Barrel #{barrel['barrel_number']}  |  {barrel['date_created']}",
-        )
+        #c.setFont("Helvetica", 6)
+        
+        #c.drawCentredString(
+            #page_w / 2,
+            #qr_y - 0.26 * inch,
+            #f"Barrel #{barrel['barrel_number']}  |  {barrel['date_created']}",
+        #)
 
         c.showPage()
 
