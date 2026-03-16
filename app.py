@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -282,6 +282,33 @@ def generate_qr_pdf(barrels_data, base_url):
     return buf
 
 
+def generate_blank_qr_pdf(qr_items, base_url):
+    """Generate a PDF of unassigned QR codes (no barrel info), one per 2x1.5 inch page."""
+    buf = io.BytesIO()
+    page_w = 2.0 * inch
+    page_h = 1.5 * inch
+    c = canvas.Canvas(buf, pagesize=(page_w, page_h))
+
+    for item in qr_items:
+        qr_buf = build_qr_image(item["qr_code_id"], base_url)
+        qr_img = ImageReader(qr_buf)
+
+        qr_size = 1.2 * inch
+        qr_x = (page_w - qr_size) / 2
+        qr_y = (page_h - qr_size) / 2 + 0.05 * inch
+
+        c.drawImage(qr_img, qr_x, qr_y, qr_size, qr_size)
+
+        c.setFont("Helvetica", 6)
+        c.drawCentredString(page_w / 2, qr_y - 0.14 * inch, item["qr_code_id"])
+
+        c.showPage()
+
+    c.save()
+    buf.seek(0)
+    return buf
+
+
 def build_qr_image(qr_code_id, base_url):
     """Generate a QR code PNG (BytesIO) encoding the app URL for the given QR ID."""
     url = f"{base_url.rstrip('/')}/?qr={qr_code_id}"
@@ -455,87 +482,64 @@ else:
     except Exception as e:
         show_error_and_stop(f"Could not connect to Google Sheets: {e}")
 
-    tab_new, tab_manage = st.tabs(["New Barrel", "Manage Barrels"])
+    base_url = st.secrets["app"]["base_url"]
+
+    tab_generate, tab_manage, tab_reassign = st.tabs(
+        ["Generate QR Code", "Manage Barrels", "Reassign Barrel"]
+    )
 
     # --------------------------------------------------
-    # Tab: New Barrel
+    # Tab: Generate QR Code
     # --------------------------------------------------
-    with tab_new:
-        st.subheader("Register a New Barrel & Generate QR")
-
-        try:
-            variety_options = get_varieties(spreadsheet)
-        except Exception as e:
-            show_error_and_stop(f"Could not load varieties: {e}")
-
-        variety = st.selectbox("Coffee Variety", variety_options, key="new_variety")
-        new_date = st.date_input("Date", value=date.today(), key="new_date")
-        new_date_str = new_date.strftime("%Y-%m-%d")
-
-        barrel_num = 1
-        try:
-            barrel_num = get_next_barrel_number(spreadsheet, variety, new_date_str)
-        except Exception:
-            pass
-
-        st.info(f"Barrel number: **{barrel_num}** (auto-assigned)")
-
-        if st.button("Generate QR & Register", use_container_width=True):
+    with tab_generate:
+        if st.button("Generate QR Code", use_container_width=True):
             try:
                 qr_code_id = generate_unique_qr_id(spreadsheet)
-                slug = build_variety_slug(variety)
-                num_str = str(int(barrel_num)).zfill(2)
-                date_compact = new_date_str.replace("-", "")
-                barrel_id = f"{slug}_{date_compact}_{num_str}"
-
-                register_barrel(
-                    spreadsheet,
-                    barrel_id,
-                    variety,
-                    new_date_str,
-                    int(barrel_num),
-                    qr_code_id,
-                )
-
-                base_url = st.secrets["app"]["base_url"]
                 qr_buf = build_qr_image(qr_code_id, base_url)
-
-                st.session_state["last_registered"] = {
-                    "barrel_id": barrel_id,
-                    "variety": variety,
-                    "date_created": new_date_str,
-                    "barrel_number": int(barrel_num),
+                if "generated_qrs" not in st.session_state:
+                    st.session_state["generated_qrs"] = []
+                st.session_state["generated_qrs"].append({
                     "qr_code_id": qr_code_id,
                     "qr_png": qr_buf.getvalue(),
-                    "base_url": base_url,
-                }
-                st.rerun()
+                })
             except Exception as e:
-                show_error_and_stop(f"Error registering barrel: {e}")
+                st.error(f"Error generating QR code: {e}")
 
-        # Show result from previous registration (persists across rerun)
-        reg = st.session_state.get("last_registered")
-        if reg:
-            st.success(f"Barrel **{reg['barrel_id']}** registered with QR code **{reg['qr_code_id']}**.")
-            st.markdown("**Scan URL:**")
-            st.code(f"{reg['base_url'].rstrip('/')}/?qr={reg['qr_code_id']}")
-            st.image(reg["qr_png"], caption=f"QR Code: {reg['qr_code_id']}", width=250)
-            st.download_button(
-                label="Download QR Code PNG",
-                data=reg["qr_png"],
-                file_name=f"{reg['qr_code_id']}_{reg['barrel_id']}.png",
-                mime="image/png",
-                use_container_width=True,
-            )
+        generated = st.session_state.get("generated_qrs", [])
+        if generated:
             st.markdown("---")
-            st.markdown("**Barrel Details**")
-            st.json({k: v for k, v in reg.items() if k not in ("qr_png", "base_url")})
+
+            # Render each QR with a checkbox
+            selected_qrs = []
+            for item in generated:
+                col_chk, col_img, col_id = st.columns([0.5, 1.5, 3])
+                checked = col_chk.checkbox(
+                    "", value=True, key=f"chk_{item['qr_code_id']}", label_visibility="collapsed"
+                )
+                col_img.image(item["qr_png"], width=80)
+                col_id.markdown(f"**{item['qr_code_id']}**")
+                if checked:
+                    selected_qrs.append(item)
+
+            st.markdown("---")
+            if selected_qrs:
+                try:
+                    pdf_buf = generate_blank_qr_pdf(selected_qrs, base_url)
+                    st.download_button(
+                        label=f"Download PDF ({len(selected_qrs)} selected)",
+                        data=pdf_buf,
+                        file_name="qr_codes.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"Could not generate PDF: {e}")
 
     # --------------------------------------------------
     # Tab: Manage Barrels
     # --------------------------------------------------
     with tab_manage:
-        st.subheader("All Active Barrels")
+        st.subheader("Active Barrels")
 
         try:
             df = get_barrels_df(spreadsheet)
@@ -566,7 +570,6 @@ else:
             selected_rows = selection.selection.rows
             if selected_rows:
                 selected_barrels = active_df.iloc[selected_rows].to_dict("records")
-                base_url = st.secrets["app"]["base_url"]
                 try:
                     pdf_buf = generate_qr_pdf(selected_barrels, base_url)
                     st.download_button(
@@ -578,6 +581,65 @@ else:
                     )
                 except Exception as e:
                     st.error(f"Could not generate PDF: {e}")
+
+    # --------------------------------------------------
+    # Tab: Reassign Barrel
+    # --------------------------------------------------
+    with tab_reassign:
+        st.subheader("Reassign a QR Code to a New Barrel")
+
+        try:
+            df_barrels = get_barrels_df(spreadsheet)
+        except Exception as e:
+            show_error_and_stop(f"Could not load barrels: {e}")
+
+        active_barrels = df_barrels[df_barrels["status"] == "active"] if not df_barrels.empty else pd.DataFrame()
+
+        if active_barrels.empty:
+            st.info("No active barrels to reassign.")
+        else:
+            barrel_options = {
+                f"{row['qr_code_id']} — {row['variety']} (Barrel #{row['barrel_number']}, {row['date_created']})": row
+                for _, row in active_barrels.iterrows()
+            }
+            selected_label = st.selectbox("Select QR Code / Barrel", list(barrel_options.keys()), key="reassign_select")
+            current = barrel_options[selected_label]
+
+            st.info(
+                f"Currently assigned to **{current['variety']}**, "
+                f"Barrel #{current['barrel_number']}, created {current['date_created']}."
+            )
+
+            try:
+                variety_options = get_varieties(spreadsheet)
+            except Exception as e:
+                show_error_and_stop(f"Could not load varieties: {e}")
+
+            new_variety = st.selectbox("New Coffee Variety", variety_options, key="reassign_variety")
+            new_date = st.date_input("New Date", value=date.today(), key="reassign_date")
+            new_date_str = new_date.strftime("%Y-%m-%d")
+
+            new_barrel_num = 1
+            try:
+                new_barrel_num = get_next_barrel_number(spreadsheet, new_variety, new_date_str)
+            except Exception:
+                pass
+
+            st.info(f"New barrel number: **{new_barrel_num}** (auto-assigned)")
+
+            if st.button("Reassign", use_container_width=True):
+                try:
+                    new_barrel_id = reassign_qr(
+                        spreadsheet,
+                        current["qr_code_id"],
+                        new_variety,
+                        new_date_str,
+                        int(new_barrel_num),
+                    )
+                    st.success(f"QR **{current['qr_code_id']}** reassigned to new barrel **{new_barrel_id}**.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to reassign: {e}")
 
     st.markdown("---")
     st.caption(f"v{APP_VERSION}")
