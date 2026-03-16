@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -398,7 +398,91 @@ if qr_param:
 
         st.markdown("---")
 
-        if st.session_state.get("last_withdrawal_done"):
+        transfer_mode = st.session_state.get("barrel_transfer_mode", False)
+
+        if transfer_mode:
+            # ----------------------------------------
+            # BARREL TRANSFER sub-flow
+            # ----------------------------------------
+            st.subheader("Barrel Transfer")
+            st.info(
+                f"Transferring remainder from **{barrel['variety']}** "
+                f"(Barrel #{barrel['barrel_number']}) to another barrel."
+            )
+
+            with st.form("transfer_form"):
+                dest_qr = st.text_input(
+                    "Destination Barrel QR Code",
+                    placeholder="e.g. QR-A7X3B2",
+                    help="Enter or scan the QR code printed on the destination barrel label.",
+                )
+                transfer_weight = st.number_input(
+                    "Weight transferred (lbs)", min_value=0.0, step=0.1, format="%.1f"
+                )
+                transfer_notes = st.text_input("Notes (optional)")
+                transfer_submitted = st.form_submit_button("Record Transfer", use_container_width=True)
+
+            if transfer_submitted:
+                dest_qr = dest_qr.strip()
+                if not dest_qr:
+                    st.warning("Please enter the destination barrel's QR code.")
+                elif dest_qr == qr_param:
+                    st.warning("Destination barrel cannot be the same as the source barrel.")
+                elif transfer_weight <= 0:
+                    st.warning("Please enter a weight greater than 0.")
+                else:
+                    try:
+                        dest_barrel = find_active_barrel(spreadsheet, dest_qr)
+                    except Exception as e:
+                        show_error_and_stop(f"Error looking up destination barrel: {e}")
+
+                    if dest_barrel is None:
+                        st.error(
+                            f"No active barrel found for QR code **{dest_qr}**. "
+                            "Check the code and try again."
+                        )
+                    else:
+                        try:
+                            notes_str = (
+                                f"Transfer to: {dest_barrel['barrel_id']} "
+                                f"({dest_barrel['variety']} Barrel #{dest_barrel['barrel_number']})"
+                            )
+                            if transfer_notes.strip():
+                                notes_str += f" — {transfer_notes.strip()}"
+                            record_withdrawal(
+                                spreadsheet,
+                                barrel["barrel_id"],
+                                qr_param,
+                                "Barrel Transfer",
+                                transfer_weight,
+                                notes_str,
+                            )
+                            st.session_state["barrel_transfer_mode"] = False
+                            st.session_state["last_transfer_done"] = {
+                                "dest_variety": dest_barrel["variety"],
+                                "dest_barrel_number": dest_barrel["barrel_number"],
+                                "weight": transfer_weight,
+                            }
+                            st.balloons()
+                            st.rerun()
+                        except Exception as e:
+                            show_error_and_stop(f"Failed to record transfer: {e}")
+
+            if st.button("Cancel Transfer", use_container_width=True):
+                st.session_state["barrel_transfer_mode"] = False
+                st.rerun()
+
+        elif st.session_state.get("last_transfer_done"):
+            info = st.session_state["last_transfer_done"]
+            st.success(
+                f"Transfer recorded — {info['weight']} lbs moved to "
+                f"**{info['dest_variety']}** Barrel #{info['dest_barrel_number']}."
+            )
+            if st.button("Done", use_container_width=True):
+                st.session_state["last_transfer_done"] = None
+                st.rerun()
+
+        elif st.session_state.get("last_withdrawal_done"):
             st.success("Withdrawal recorded!")
             if st.button("Record Another Withdrawal", use_container_width=True):
                 st.session_state["last_withdrawal_done"] = False
@@ -436,10 +520,16 @@ if qr_param:
                     except Exception as e:
                         show_error_and_stop(f"Failed to save withdrawal: {e}")
 
-        st.markdown("---")
-        if st.button("Reassign this QR to a different barrel", use_container_width=True):
-            st.session_state["force_reassign"] = True
-            st.rerun()
+        if not transfer_mode:
+            st.markdown("---")
+            if st.button("Reassign this QR to a different barrel", use_container_width=True):
+                st.session_state["force_reassign"] = True
+                st.rerun()
+            if st.button("Barrel Transfer", use_container_width=True):
+                st.session_state["barrel_transfer_mode"] = True
+                st.session_state["last_withdrawal_done"] = False
+                st.session_state["last_transfer_done"] = None
+                st.rerun()
 
     else:
         # ----------------------------------------
