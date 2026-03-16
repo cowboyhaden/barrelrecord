@@ -28,7 +28,7 @@ from reportlab.pdfgen import canvas
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
+    # drive scope omitted — open_by_key only requires the spreadsheets scope
 ]
 
 PRODUCT_TYPES = [
@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
@@ -173,7 +173,7 @@ def register_barrel(spreadsheet, barrel_id, variety, date_str, barrel_num, qr_co
         ws = spreadsheet.worksheet(BARRELS_SHEET)
         assigned_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = [barrel_id, variety, date_str, barrel_num, qr_code_id, "active", assigned_date]
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to register barrel: {e}") from e
 
@@ -184,7 +184,7 @@ def register_qr_code(spreadsheet, qr_code_id):
         ws = spreadsheet.worksheet(BARRELS_SHEET)
         generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = ["", "", "", "", qr_code_id, "unassigned", generated_date]
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to register QR code: {e}") from e
 
@@ -196,7 +196,7 @@ def record_withdrawal(spreadsheet, barrel_id, qr_code_id, product_type, weight_o
         withdrawal_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = [withdrawal_id, barrel_id, qr_code_id, product_type, weight_oz, timestamp, notes]
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to record withdrawal: {e}") from e
 
@@ -239,7 +239,7 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
             "active",
             assigned_date,
         ]
-        ws.append_row(new_row, value_input_option="USER_ENTERED")
+        ws.append_row(new_row, value_input_option="RAW")
         return new_barrel_id
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to reassign QR code: {e}") from e
@@ -428,27 +428,31 @@ if qr_param:
                 f"(Barrel #{barrel['barrel_number']}) to another barrel."
             )
 
-            # Destination QR — live scanner or manual entry
-            if not st.session_state.get("transfer_dest_qr_val"):
+            # Destination QR — live scanner or manual entry.
+            # Show the scanner until the text input has a value.
+            # We set st.session_state["transfer_dest_qr_input"] directly so the
+            # keyed text_input picks it up on the next render (passing value= only
+            # works on first render once a widget owns its session state slot).
+            if not st.session_state.get("transfer_dest_qr_input"):
                 scanned = _qr_scanner(key="qr_live_scanner", default=None)
                 if scanned:
-                    st.session_state["transfer_dest_qr_val"] = scanned
+                    st.session_state["transfer_dest_qr_input"] = scanned
                     st.rerun()
 
             dest_qr = st.text_input(
                 "Destination Barrel QR Code",
-                value=st.session_state.get("transfer_dest_qr_val", ""),
                 placeholder="Scan above or type manually — e.g. QR-A7X3B2",
                 key="transfer_dest_qr_input",
             )
-            st.session_state["transfer_dest_qr_val"] = dest_qr
 
             transfer_notes = st.text_input("Notes (optional)", key="transfer_notes_input")
 
             if st.button("Record Transfer", use_container_width=True, key="record_transfer_btn"):
-                dest_qr_final = st.session_state.get("transfer_dest_qr_val", "").strip()
+                dest_qr_final = dest_qr.strip().upper()
                 if not dest_qr_final:
                     st.warning("Please enter the destination barrel's QR code.")
+                elif not _QR_ID_RE.match(dest_qr_final):
+                    st.warning("Invalid QR code format. Expected format: QR-XXXXXX")
                 elif dest_qr_final == qr_param:
                     st.warning("Destination barrel cannot be the same as the source barrel.")
                 else:
@@ -479,7 +483,7 @@ if qr_param:
                                 notes_str,
                             )
                             st.session_state["barrel_transfer_mode"] = False
-                            st.session_state["transfer_dest_qr_val"] = ""
+                            st.session_state["transfer_dest_qr_input"] = ""
                             st.session_state["last_transfer_done"] = {
                                 "dest_variety": dest_barrel["variety"],
                                 "dest_barrel_number": dest_barrel["barrel_number"],
@@ -491,7 +495,7 @@ if qr_param:
 
             if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
-                st.session_state["transfer_dest_qr_val"] = ""
+                st.session_state["transfer_dest_qr_input"] = ""
                 st.rerun()
 
         elif st.session_state.get("last_transfer_done"):
@@ -553,7 +557,7 @@ if qr_param:
                 st.session_state["barrel_transfer_mode"] = True
                 st.session_state["last_withdrawal_done"] = False
                 st.session_state["last_transfer_done"] = None
-                st.session_state["transfer_dest_qr_val"] = ""
+                st.session_state["transfer_dest_qr_input"] = ""
                 st.rerun()
 
     else:
@@ -727,7 +731,7 @@ else:
             variety_filter = st.text_input("Filter by variety", key="filter_variety")
             if variety_filter.strip():
                 active_df = active_df[
-                    active_df["variety"].str.contains(variety_filter.strip(), case=False, na=False)
+                    active_df["variety"].str.contains(variety_filter.strip(), case=False, na=False, regex=False)
                 ].reset_index(drop=True)
 
             display_cols = ["barrel_id", "variety", "date_created", "barrel_number", "qr_code_id", "assigned_date"]
