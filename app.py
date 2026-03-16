@@ -37,7 +37,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 BARRELS_SHEET = "barrels"
 WITHDRAWALS_SHEET = "withdrawals"
@@ -167,6 +167,17 @@ def register_barrel(spreadsheet, barrel_id, variety, date_str, barrel_num, qr_co
         raise RuntimeError(f"Failed to register barrel: {e}") from e
 
 
+def register_qr_code(spreadsheet, qr_code_id):
+    """Write an unassigned QR code row to the barrels tab."""
+    try:
+        ws = spreadsheet.worksheet(BARRELS_SHEET)
+        generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = ["", "", "", "", qr_code_id, "unassigned", generated_date]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+    except gspread.exceptions.APIError as e:
+        raise RuntimeError(f"Failed to register QR code: {e}") from e
+
+
 def record_withdrawal(spreadsheet, barrel_id, qr_code_id, product_type, weight_oz, notes):
     """Append a new row to the withdrawals tab."""
     try:
@@ -190,12 +201,18 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
         records = ws.get_all_records()
         df = pd.DataFrame(records) if records else pd.DataFrame(columns=BARRELS_HEADERS)
 
-        # Find row index of the currently active barrel (1-based + 1 header row)
+        status_col = BARRELS_HEADERS.index("status") + 1
+
+        # Mark active barrel as reassigned
         match = df[(df["qr_code_id"] == qr_code_id) & (df["status"] == "active")]
         if not match.empty:
             sheet_row = match.index[0] + 2  # +1 for 0-index, +1 for header
-            status_col = BARRELS_HEADERS.index("status") + 1
             ws.update_cell(sheet_row, status_col, "reassigned")
+
+        # Mark any unassigned rows for this QR as assigned
+        unassigned = df[(df["qr_code_id"] == qr_code_id) & (df["status"] == "unassigned")]
+        for idx in unassigned.index:
+            ws.update_cell(idx + 2, status_col, "assigned")
 
         # Build new barrel row
         slug = build_variety_slug(new_variety)
@@ -495,6 +512,7 @@ else:
         if st.button("Generate QR Code", use_container_width=True):
             try:
                 qr_code_id = generate_unique_qr_id(spreadsheet)
+                register_qr_code(spreadsheet, qr_code_id)
                 qr_buf = build_qr_image(qr_code_id, base_url)
                 if "generated_qrs" not in st.session_state:
                     st.session_state["generated_qrs"] = []
@@ -539,12 +557,24 @@ else:
     # Tab: Manage Barrels
     # --------------------------------------------------
     with tab_manage:
-        st.subheader("Active Barrels")
-
         try:
             df = get_barrels_df(spreadsheet)
         except Exception as e:
             show_error_and_stop(f"Could not load barrels: {e}")
+
+        # Unassigned QR codes
+        unassigned_df = df[df["status"] == "unassigned"][["qr_code_id", "assigned_date"]].copy().reset_index(drop=True) if not df.empty else pd.DataFrame()
+        unassigned_df = unassigned_df.rename(columns={"assigned_date": "generated_date"})
+
+        st.subheader("Unassigned QR Codes")
+        if unassigned_df.empty:
+            st.caption("No unassigned codes.")
+        else:
+            st.dataframe(unassigned_df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(unassigned_df)} unassigned code(s).")
+
+        st.markdown("---")
+        st.subheader("Active Barrels")
 
         if df.empty:
             st.info("No barrels registered yet.")
