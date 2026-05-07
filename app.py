@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.6.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
@@ -125,6 +125,20 @@ def find_active_barrel(spreadsheet, qr_code_id):
         if match.empty:
             return None
         return match.iloc[0].to_dict()
+    except gspread.exceptions.APIError as e:
+        raise RuntimeError(f"Sheet lookup failed: {e}") from e
+
+
+def find_latest_inactive_barrel(spreadsheet, qr_code_id):
+    """Return the most recent checked-out barrel row for this QR, or None."""
+    try:
+        df = get_barrels_df(spreadsheet)
+        if df.empty:
+            return None
+        match = df[(df["qr_code_id"] == qr_code_id) & (df["status"] == "inactive")]
+        if match.empty:
+            return None
+        return match.iloc[-1].to_dict()
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Sheet lookup failed: {e}") from e
 
@@ -243,6 +257,24 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
         return new_barrel_id
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to reassign QR code: {e}") from e
+
+
+def deactivate_barrel(spreadsheet, qr_code_id):
+    """Flip the active row for qr_code_id to status='inactive' (checked out).
+    Returns True if a row was updated, False if no active row was found."""
+    try:
+        ws = spreadsheet.worksheet(BARRELS_SHEET)
+        records = ws.get_all_records()
+        df = pd.DataFrame(records) if records else pd.DataFrame(columns=BARRELS_HEADERS)
+        match = df[(df["qr_code_id"] == qr_code_id) & (df["status"] == "active")]
+        if match.empty:
+            return False
+        status_col = BARRELS_HEADERS.index("status") + 1
+        sheet_row = match.index[0] + 2  # +1 for 0-index, +1 for header
+        ws.update_cell(sheet_row, status_col, "inactive")
+        return True
+    except gspread.exceptions.APIError as e:
+        raise RuntimeError(f"Failed to deactivate barrel: {e}") from e
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -485,9 +517,13 @@ if qr_param:
                                 0,
                                 notes_str,
                             )
+                            deactivate_barrel(spreadsheet, qr_param)
+                            get_barrels_df.clear()
                             st.session_state["barrel_transfer_mode"] = False
                             st.session_state["_clear_dest_qr_input"] = True
                             st.session_state["last_transfer_done"] = {
+                                "source_variety": barrel["variety"],
+                                "source_barrel_number": barrel["barrel_number"],
                                 "dest_variety": dest_barrel["variety"],
                                 "dest_barrel_number": dest_barrel["barrel_number"],
                             }
@@ -499,16 +535,6 @@ if qr_param:
             if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
                 st.session_state["_clear_dest_qr_input"] = True
-                st.rerun()
-
-        elif st.session_state.get("last_transfer_done"):
-            info = st.session_state["last_transfer_done"]
-            st.success(
-                f"Transfer recorded — remainder moved to "
-                f"**{info['dest_variety']}** Barrel #{info['dest_barrel_number']}."
-            )
-            if st.button("Done", use_container_width=True):
-                st.session_state["last_transfer_done"] = None
                 st.rerun()
 
         elif st.session_state.get("last_withdrawal_done"):
@@ -553,20 +579,80 @@ if qr_param:
 
         if not transfer_mode:
             st.markdown("---")
-            if st.button("Reassign this QR to a different barrel", use_container_width=True):
-                st.session_state["force_reassign"] = True
-                st.rerun()
-            if st.button("Barrel Transfer", use_container_width=True):
-                st.session_state["barrel_transfer_mode"] = True
-                st.session_state["last_withdrawal_done"] = False
-                st.session_state["last_transfer_done"] = None
-                st.session_state["transfer_dest_qr_input"] = ""
-                st.rerun()
+            if st.session_state.get("confirm_checkout"):
+                st.warning(
+                    f"Mark **{barrel['variety']}** Barrel #{barrel['barrel_number']} "
+                    "as empty? The QR code will be deactivated and must be "
+                    "reactivated on the next check-in."
+                )
+                col_yes, col_no = st.columns(2)
+                if col_yes.button(
+                    "Yes, check out barrel",
+                    use_container_width=True,
+                    key="confirm_checkout_yes",
+                ):
+                    try:
+                        deactivate_barrel(spreadsheet, qr_param)
+                        get_barrels_df.clear()
+                        st.session_state["confirm_checkout"] = False
+                        st.session_state["last_checkout_done"] = {
+                            "variety": barrel["variety"],
+                            "barrel_number": barrel["barrel_number"],
+                        }
+                        st.balloons()
+                        st.rerun()
+                    except Exception as e:
+                        show_error_and_stop(f"Failed to check out barrel: {e}")
+                if col_no.button(
+                    "Cancel",
+                    use_container_width=True,
+                    key="confirm_checkout_no",
+                ):
+                    st.session_state["confirm_checkout"] = False
+                    st.rerun()
+            else:
+                if st.button("Reassign this QR to a different barrel", use_container_width=True):
+                    st.session_state["force_reassign"] = True
+                    st.rerun()
+                if st.button("Barrel Transfer", use_container_width=True):
+                    st.session_state["barrel_transfer_mode"] = True
+                    st.session_state["last_withdrawal_done"] = False
+                    st.session_state["last_transfer_done"] = None
+                    st.session_state["transfer_dest_qr_input"] = ""
+                    st.rerun()
+                if st.button("Mark Barrel Empty (Check Out)", use_container_width=True):
+                    st.session_state["confirm_checkout"] = True
+                    st.rerun()
 
     else:
         # ----------------------------------------
-        # WORKFLOW 3: Reassign QR to a new barrel
+        # WORKFLOW 3: Reassign / Check In a QR to a new barrel
         # ----------------------------------------
+        if st.session_state.get("last_checkout_done"):
+            info = st.session_state["last_checkout_done"]
+            st.success(
+                f"✅ {info['variety']} Barrel #{info['barrel_number']} checked out. "
+                f"QR code **{qr_param}** is deactivated until reactivated."
+            )
+            st.session_state["last_checkout_done"] = None
+
+        if st.session_state.get("last_transfer_done"):
+            info = st.session_state["last_transfer_done"]
+            st.success(
+                f"✅ Transfer recorded — remainder moved from "
+                f"**{info['source_variety']}** Barrel #{info['source_barrel_number']} "
+                f"to **{info['dest_variety']}** Barrel #{info['dest_barrel_number']}. "
+                f"Source QR **{qr_param}** is deactivated until reactivated."
+            )
+            st.session_state["last_transfer_done"] = None
+
+        prior_inactive = None
+        if not barrel:
+            try:
+                prior_inactive = find_latest_inactive_barrel(spreadsheet, qr_param)
+            except Exception:
+                prior_inactive = None
+
         if barrel:
             st.warning(
                 f"QR code **{qr_param}** is currently assigned to "
@@ -574,13 +660,26 @@ if qr_param:
                 f"created {barrel['date_created']}). "
                 "You are reassigning it to a new barrel."
             )
+            section_heading = "Assign to New Barrel"
+            submit_label = "Assign QR to New Barrel"
+        elif prior_inactive:
+            st.info(
+                f"QR code **{qr_param}** was last used for "
+                f"**{prior_inactive['variety']}** (Barrel #{prior_inactive['barrel_number']}, "
+                f"created {prior_inactive['date_created']}) and was checked out. "
+                "Check it in below to reactivate."
+            )
+            section_heading = "Reactivate (Check In)"
+            submit_label = "Check In to New Barrel"
         else:
             st.warning(
                 f"QR code **{qr_param}** is not assigned to any active barrel. "
                 "Assign it to a new barrel below."
             )
+            section_heading = "Assign to New Barrel"
+            submit_label = "Assign QR to New Barrel"
 
-        st.subheader("Assign to New Barrel")
+        st.subheader(section_heading)
 
         try:
             variety_options = get_varieties(spreadsheet)
@@ -599,7 +698,7 @@ if qr_param:
 
         st.info(f"Barrel number: **{barrel_num}** (auto-assigned)")
 
-        if st.button("Assign QR to New Barrel", use_container_width=True):
+        if st.button(submit_label, use_container_width=True):
             try:
                 new_barrel_id = reassign_qr(
                     spreadsheet,
