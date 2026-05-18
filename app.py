@@ -407,6 +407,34 @@ def show_error_and_stop(message):
     st.stop()
 
 
+def render_scan_new_ui():
+    """Top-right global 'Scan New' button. When active, renders scanner and stops the page."""
+    if st.session_state.get("scan_new_mode"):
+        st.info("Scan the new barrel's QR code.")
+        scanned_new = _qr_scanner(key="qr_scan_new_scanner", default=None)
+        if scanned_new:
+            candidate = scanned_new.strip().upper()
+            if _QR_ID_RE.match(candidate):
+                st.session_state["scan_new_mode"] = False
+                st.query_params["qr"] = candidate
+                st.rerun()
+            else:
+                st.warning("Invalid QR code format. Expected QR-XXXXXX.")
+        if st.button("Cancel", use_container_width=True, key="cancel_scan_new_btn"):
+            st.session_state["scan_new_mode"] = False
+            st.rerun()
+        st.stop()
+    else:
+        _spacer, _btn = st.columns([3, 1])
+        with _btn:
+            if st.button("Scan New", use_container_width=True, key="scan_new_btn"):
+                st.session_state["scan_new_mode"] = True
+                st.rerun()
+
+
+render_scan_new_ui()
+
+
 # --------------------------------------------------
 # Route: determine if this is an admin or scan visit
 # --------------------------------------------------
@@ -441,32 +469,10 @@ if qr_param:
         # ----------------------------------------
         # WORKFLOW 2: Record a withdrawal
         # ----------------------------------------
-        top_spacer, top_btn = st.columns([3, 1])
-        with top_btn:
-            if st.button("Scan New", use_container_width=True, key="scan_new_btn"):
-                st.session_state["scan_new_mode"] = True
-                st.rerun()
-
         st.subheader(barrel["variety"])
         st.caption(
             f"Barrel #{barrel['barrel_number']} • Created {barrel['date_created']}"
         )
-
-        if st.session_state.get("scan_new_mode"):
-            st.info("Scan the new barrel's QR code.")
-            scanned_new = _qr_scanner(key="qr_scan_new_scanner", default=None)
-            if scanned_new:
-                candidate = scanned_new.strip().upper()
-                if _QR_ID_RE.match(candidate):
-                    st.session_state["scan_new_mode"] = False
-                    st.query_params["qr"] = candidate
-                    st.rerun()
-                else:
-                    st.warning("Invalid QR code format. Expected QR-XXXXXX.")
-            if st.button("Cancel", use_container_width=True, key="cancel_scan_new_btn"):
-                st.session_state["scan_new_mode"] = False
-                st.rerun()
-            st.stop()
 
         st.markdown("---")
 
