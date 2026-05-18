@@ -84,11 +84,17 @@
         var status = document.getElementById("status");
         var found = false;
 
+        // Request rear camera with continuous focus (helps Android phones
+        // lock onto a close QR sticker on barrel labels).
         navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: { ideal: "environment" },
                 width: { ideal: 1280 },
-                height: { ideal: 720 }
+                height: { ideal: 720 },
+                advanced: [
+                    { focusMode: "continuous" },
+                    { focusMode: "auto" }
+                ]
             }
         })
         .then(function(stream) {
@@ -96,6 +102,17 @@
             video.play();
             status.textContent = "🔍 Scanning — hold QR code steady...";
             setHeight();
+            // Try to apply continuous focus / torch via applyConstraints when
+            // the initial constraints object did not honor it.
+            try {
+                var track = stream.getVideoTracks()[0];
+                if (track && typeof track.applyConstraints === "function") {
+                    var caps = (track.getCapabilities && track.getCapabilities()) || {};
+                    if (caps.focusMode && caps.focusMode.indexOf("continuous") !== -1) {
+                        track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(function(){});
+                    }
+                }
+            } catch (e) { /* non-fatal */ }
             requestAnimationFrame(scan);
         })
         .catch(function(err) {
@@ -105,15 +122,38 @@
             setHeight();
         });
 
+        // Tap on video to trigger a single-shot autofocus on supported devices.
+        video.addEventListener("click", function() {
+            try {
+                var stream = video.srcObject;
+                if (!stream) return;
+                var track = stream.getVideoTracks()[0];
+                if (track && track.applyConstraints) {
+                    track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] }).catch(function(){});
+                }
+            } catch (e) { /* ignore */ }
+        });
+
+        var frameCount = 0;
         function scan() {
             if (found) return;
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                ctx.drawImage(video, 0, 0);
-                var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                // Center-crop to a square and downsample to ~480px for faster,
+                // more reliable jsQR decoding on high-res Android cameras.
+                var srcW = video.videoWidth;
+                var srcH = video.videoHeight;
+                var side = Math.min(srcW, srcH);
+                var sx = Math.max(0, (srcW - side) / 2);
+                var sy = Math.max(0, (srcH - side) / 2);
+                var target = 480;
+                canvas.width = target;
+                canvas.height = target;
+                ctx.drawImage(video, sx, sy, side, side, 0, 0, target, target);
+                var imageData = ctx.getImageData(0, 0, target, target);
+                // attemptBoth catches inverted/dark-background QR codes that
+                // some Android cameras produce after exposure adjustment.
                 var code = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "dontInvert"
+                    inversionAttempts: "attemptBoth"
                 });
                 if (code) {
                     var val = extractQrId(code.data);
@@ -129,6 +169,12 @@
                         return;
                     }
                     // QR code found but not in expected format — keep scanning
+                }
+                frameCount++;
+                // Refresh the status text every ~30 frames so the user can see
+                // that the scan loop is alive even when no code is detected.
+                if (frameCount % 30 === 0) {
+                    status.textContent = "🔍 Scanning… tap video to refocus (" + frameCount + " frames)";
                 }
             }
             requestAnimationFrame(scan);

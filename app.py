@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
