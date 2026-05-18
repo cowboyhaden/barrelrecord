@@ -407,8 +407,24 @@ def show_error_and_stop(message):
     st.stop()
 
 
+_SCAN_BTN_CSS = """
+<style>
+/* Keep the top 'Scan New' button row at 1/4 width even on mobile.
+   Streamlit normally stacks columns to 100% width on narrow viewports;
+   we override that for the first horizontal block on the page. */
+div[data-testid="stHorizontalBlock"]:first-of-type {
+    flex-wrap: nowrap !important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="stColumn"] {
+    min-width: 0 !important;
+}
+</style>
+"""
+
+
 def render_scan_new_ui():
     """Top-right global 'Scan New' button. When active, renders scanner and stops the page."""
+    st.markdown(_SCAN_BTN_CSS, unsafe_allow_html=True)
     if st.session_state.get("scan_new_mode"):
         st.info("Scan the new barrel's QR code.")
         scanned_new = _qr_scanner(key="qr_scan_new_scanner", default=None)
