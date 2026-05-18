@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
@@ -441,10 +441,32 @@ if qr_param:
         # ----------------------------------------
         # WORKFLOW 2: Record a withdrawal
         # ----------------------------------------
-        st.title(barrel["variety"])
-        col1, col2 = st.columns(2)
-        col1.metric("Date Created", barrel["date_created"])
-        col2.metric("Barrel #", barrel["barrel_number"])
+        header_left, header_right = st.columns([3, 1])
+        with header_right:
+            if st.button("Scan New", use_container_width=True, key="scan_new_btn"):
+                st.session_state["scan_new_mode"] = True
+                st.rerun()
+        with header_left:
+            st.subheader(barrel["variety"])
+        st.caption(
+            f"Barrel #{barrel['barrel_number']} • Created {barrel['date_created']}"
+        )
+
+        if st.session_state.get("scan_new_mode"):
+            st.info("Scan the new barrel's QR code.")
+            scanned_new = _qr_scanner(key="qr_scan_new_scanner", default=None)
+            if scanned_new:
+                candidate = scanned_new.strip().upper()
+                if _QR_ID_RE.match(candidate):
+                    st.session_state["scan_new_mode"] = False
+                    st.query_params["qr"] = candidate
+                    st.rerun()
+                else:
+                    st.warning("Invalid QR code format. Expected QR-XXXXXX.")
+            if st.button("Cancel", use_container_width=True, key="cancel_scan_new_btn"):
+                st.session_state["scan_new_mode"] = False
+                st.rerun()
+            st.stop()
 
         st.markdown("---")
 
@@ -549,18 +571,26 @@ if qr_param:
                 show_error_and_stop(f"Could not load products: {e}")
 
             with st.form("withdrawal_form"):
-                product_type = st.selectbox("Product Type", product_options)
-                weight_lbs = st.number_input(
-                    "Weight (lbs)", min_value=0.0, step=0.1, format="%.1f"
+                product_type = st.selectbox(
+                    "Product Type *",
+                    product_options,
+                    index=None,
+                    placeholder="Select product type",
                 )
-                notes = st.text_input("Notes (optional)")
+                weight_lbs = st.number_input(
+                    "Weight (lbs) *",
+                    min_value=0.0,
+                    step=0.1,
+                    format="%.1f",
+                    value=None,
+                )
                 submitted = st.form_submit_button("Record Withdrawal", use_container_width=True)
 
             if submitted:
-                if weight_lbs <= 0:
+                if product_type is None:
+                    st.warning("Please select a product type.")
+                elif weight_lbs is None or weight_lbs <= 0:
                     st.warning("Please enter a weight greater than 0.")
-                elif len(notes) > 500:
-                    st.warning("Notes must be 500 characters or fewer.")
                 else:
                     try:
                         record_withdrawal(
@@ -569,7 +599,7 @@ if qr_param:
                             qr_param,
                             product_type,
                             weight_lbs,
-                            notes[:500],
+                            "",
                         )
                         st.session_state["last_withdrawal_done"] = True
                         st.balloons()
@@ -611,9 +641,6 @@ if qr_param:
                     st.session_state["confirm_checkout"] = False
                     st.rerun()
             else:
-                if st.button("Reassign this QR to a different barrel", use_container_width=True):
-                    st.session_state["force_reassign"] = True
-                    st.rerun()
                 if st.button("Barrel Transfer", use_container_width=True):
                     st.session_state["barrel_transfer_mode"] = True
                     st.session_state["last_withdrawal_done"] = False
@@ -690,6 +717,14 @@ if qr_param:
         new_date = st.date_input("Date", value=date.today())
         new_date_str = new_date.strftime("%Y-%m-%d")
 
+        starting_weight = st.number_input(
+            "Starting Weight (lbs) *",
+            min_value=0.0,
+            step=0.1,
+            format="%.1f",
+            value=None,
+        )
+
         barrel_num = 1
         try:
             barrel_num = get_next_barrel_number(spreadsheet, variety, new_date_str)
@@ -699,20 +734,31 @@ if qr_param:
         st.info(f"Barrel number: **{barrel_num}** (auto-assigned)")
 
         if st.button(submit_label, use_container_width=True):
-            try:
-                new_barrel_id = reassign_qr(
-                    spreadsheet,
-                    qr_param,
-                    variety,
-                    new_date_str,
-                    int(barrel_num),
-                )
-                get_barrels_df.clear()
-                st.success(f"QR code assigned to new barrel **{new_barrel_id}**.")
-                st.session_state["force_reassign"] = False
-                st.rerun()
-            except Exception as e:
-                show_error_and_stop(f"Failed to reassign QR code: {e}")
+            if starting_weight is None or starting_weight <= 0:
+                st.warning("Please enter a starting weight greater than 0.")
+            else:
+                try:
+                    new_barrel_id = reassign_qr(
+                        spreadsheet,
+                        qr_param,
+                        variety,
+                        new_date_str,
+                        int(barrel_num),
+                    )
+                    record_withdrawal(
+                        spreadsheet,
+                        new_barrel_id,
+                        qr_param,
+                        "Starting Weight",
+                        starting_weight,
+                        "Initial barrel weight",
+                    )
+                    get_barrels_df.clear()
+                    st.success(f"QR code assigned to new barrel **{new_barrel_id}**.")
+                    st.session_state["force_reassign"] = False
+                    st.rerun()
+                except Exception as e:
+                    show_error_and_stop(f"Failed to reassign QR code: {e}")
 
 # ==================================================
 # WORKFLOW 1: ADMIN PANEL (no ?qr= param)
