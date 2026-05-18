@@ -41,7 +41,7 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
@@ -482,7 +482,7 @@ def render_scan_new_ui():
     """Top-right global 'Scan New' button. When active, renders scanner and stops the page."""
     st.markdown(_SCAN_BTN_CSS, unsafe_allow_html=True)
     if st.session_state.get("scan_new_mode"):
-        st.info("Scan the new barrel's QR code.")
+        st.info("Scan the new barrel's QR code or enter it manually below.")
         scanned_new = _qr_scanner(key="qr_scan_new_scanner", default=None)
         if scanned_new:
             candidate = scanned_new.strip().upper()
@@ -492,6 +492,28 @@ def render_scan_new_ui():
                 st.rerun()
             else:
                 st.warning("Invalid QR code format. Expected QR-XXXXXX.")
+
+        st.markdown("**Manual entry (failsafe)**")
+        with st.form("scan_new_manual_form", clear_on_submit=False):
+            manual_qr = st.text_input(
+                "QR Code ID",
+                placeholder="e.g. QR-A7X3B2",
+                key="scan_new_manual_input",
+            )
+            manual_submitted = st.form_submit_button(
+                "Go to barrel", use_container_width=True
+            )
+        if manual_submitted:
+            manual_clean = manual_qr.strip().upper()
+            if not manual_clean:
+                st.warning("Please enter a QR code ID.")
+            elif not _QR_ID_RE.match(manual_clean):
+                st.warning("Invalid QR code format. Expected QR-XXXXXX.")
+            else:
+                st.session_state["scan_new_mode"] = False
+                st.query_params["qr"] = manual_clean
+                st.rerun()
+
         if st.button("Cancel", use_container_width=True, key="cancel_scan_new_btn"):
             st.session_state["scan_new_mode"] = False
             st.rerun()
