@@ -41,13 +41,13 @@ PRODUCT_TYPES = [
     "Other",
 ]
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "3.0.0"
 
 # Valid QR code ID format: QR- followed by 4–10 uppercase alphanumeric characters
 _QR_ID_RE = re.compile(r"^QR-[A-Z0-9]{4,10}$")
 
 BARRELS_SHEET = "barrels"
-WITHDRAWALS_SHEET = "withdrawals"
+TRANSACTIONS_SHEET = "transactions"
 VARIETIES_SHEET = "varieties"
 PRODUCTS_SHEET = "products"
 
@@ -59,17 +59,25 @@ BARRELS_HEADERS = [
     "qr_code_id",
     "status",
     "assigned_date",
+    "starting_weight_lbs",
 ]
 
-WITHDRAWALS_HEADERS = [
-    "withdrawal_id",
+TRANSACTIONS_HEADERS = [
+    "txn_id",
     "barrel_id",
     "qr_code_id",
+    "type",
     "product_type",
-    "weight_oz",
+    "weight_lbs",
+    "related_barrel_id",
     "timestamp",
     "notes",
 ]
+
+# Transaction type constants
+TXN_WITHDRAWAL = "withdrawal"
+TXN_TRANSFER_OUT = "transfer_out"
+TXN_TRANSFER_IN = "transfer_in"
 
 # ============================
 # 3. HELPER FUNCTIONS
@@ -103,16 +111,35 @@ def get_barrels_df(_spreadsheet):
         raise RuntimeError(f"Failed to read barrels sheet: {e}") from e
 
 
-def get_withdrawals_df(spreadsheet):
-    """Return withdrawals tab as a DataFrame."""
+def get_transactions_df(spreadsheet):
+    """Return transactions tab as a DataFrame."""
     try:
-        ws = spreadsheet.worksheet(WITHDRAWALS_SHEET)
+        ws = spreadsheet.worksheet(TRANSACTIONS_SHEET)
         records = ws.get_all_records()
         if not records:
-            return pd.DataFrame(columns=WITHDRAWALS_HEADERS)
+            return pd.DataFrame(columns=TRANSACTIONS_HEADERS)
         return pd.DataFrame(records)
     except gspread.exceptions.APIError as e:
-        raise RuntimeError(f"Failed to read withdrawals sheet: {e}") from e
+        raise RuntimeError(f"Failed to read transactions sheet: {e}") from e
+
+
+def compute_remaining_lbs(spreadsheet, barrel):
+    """Return remaining lbs for a barrel: starting_weight + signed sum of transactions."""
+    try:
+        starting = float(barrel.get("starting_weight_lbs") or 0)
+    except (TypeError, ValueError):
+        starting = 0.0
+    try:
+        df = get_transactions_df(spreadsheet)
+    except Exception:
+        return starting
+    if df.empty:
+        return starting
+    mask = df["barrel_id"] == barrel["barrel_id"]
+    if not mask.any():
+        return starting
+    weights = pd.to_numeric(df.loc[mask, "weight_lbs"], errors="coerce").fillna(0)
+    return starting + float(weights.sum())
 
 
 def find_active_barrel(spreadsheet, qr_code_id):
@@ -181,12 +208,21 @@ def build_variety_slug(variety):
     return variety.lower().strip().replace(" ", "-").replace("/", "-")
 
 
-def register_barrel(spreadsheet, barrel_id, variety, date_str, barrel_num, qr_code_id):
+def register_barrel(spreadsheet, barrel_id, variety, date_str, barrel_num, qr_code_id, starting_weight_lbs):
     """Append a new row to the barrels tab."""
     try:
         ws = spreadsheet.worksheet(BARRELS_SHEET)
         assigned_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row = [barrel_id, variety, date_str, barrel_num, qr_code_id, "active", assigned_date]
+        row = [
+            barrel_id,
+            variety,
+            date_str,
+            barrel_num,
+            qr_code_id,
+            "active",
+            assigned_date,
+            starting_weight_lbs,
+        ]
         ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to register barrel: {e}") from e
@@ -197,25 +233,44 @@ def register_qr_code(spreadsheet, qr_code_id):
     try:
         ws = spreadsheet.worksheet(BARRELS_SHEET)
         generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row = ["", "", "", "", qr_code_id, "unassigned", generated_date]
+        row = ["", "", "", "", qr_code_id, "unassigned", generated_date, ""]
         ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
         raise RuntimeError(f"Failed to register QR code: {e}") from e
 
 
-def record_withdrawal(spreadsheet, barrel_id, qr_code_id, product_type, weight_oz, notes):
-    """Append a new row to the withdrawals tab."""
+def record_transaction(
+    spreadsheet,
+    barrel_id,
+    qr_code_id,
+    txn_type,
+    product_type,
+    weight_lbs,
+    related_barrel_id,
+    notes,
+):
+    """Append a new row to the transactions tab. weight_lbs is signed: negative for outflows."""
     try:
-        ws = spreadsheet.worksheet(WITHDRAWALS_SHEET)
-        withdrawal_id = str(uuid.uuid4())
+        ws = spreadsheet.worksheet(TRANSACTIONS_SHEET)
+        txn_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row = [withdrawal_id, barrel_id, qr_code_id, product_type, weight_oz, timestamp, notes]
+        row = [
+            txn_id,
+            barrel_id,
+            qr_code_id,
+            txn_type,
+            product_type,
+            weight_lbs,
+            related_barrel_id,
+            timestamp,
+            notes,
+        ]
         ws.append_row(row, value_input_option="RAW")
     except gspread.exceptions.APIError as e:
-        raise RuntimeError(f"Failed to record withdrawal: {e}") from e
+        raise RuntimeError(f"Failed to record transaction: {e}") from e
 
 
-def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_num):
+def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_num, starting_weight_lbs):
     """
     Mark the existing active barrel for qr_code_id as 'reassigned',
     then append a new active barrel row with the new details.
@@ -252,6 +307,7 @@ def reassign_qr(spreadsheet, qr_code_id, new_variety, new_date_str, new_barrel_n
             qr_code_id,
             "active",
             assigned_date,
+            starting_weight_lbs,
         ]
         ws.append_row(new_row, value_input_option="RAW")
         return new_barrel_id
@@ -547,34 +603,53 @@ if qr_param:
                         )
                     else:
                         try:
-                            notes_str = (
-                                f"Transfer to: {dest_barrel['barrel_id']} "
-                                f"({dest_barrel['variety']} Barrel #{dest_barrel['barrel_number']})"
-                            )
-                            if transfer_notes.strip():
-                                notes_str += f" — {transfer_notes.strip()}"
-                            record_withdrawal(
-                                spreadsheet,
-                                barrel["barrel_id"],
-                                qr_param,
-                                "Barrel Transfer",
-                                0,
-                                notes_str,
-                            )
-                            deactivate_barrel(spreadsheet, qr_param)
-                            get_barrels_df.clear()
-                            st.session_state["barrel_transfer_mode"] = False
-                            st.session_state["_clear_dest_qr_input"] = True
-                            st.session_state["last_transfer_done"] = {
-                                "source_variety": barrel["variety"],
-                                "source_barrel_number": barrel["barrel_number"],
-                                "dest_variety": dest_barrel["variety"],
-                                "dest_barrel_number": dest_barrel["barrel_number"],
-                            }
-                            st.balloons()
-                            st.rerun()
+                            remaining = compute_remaining_lbs(spreadsheet, barrel)
                         except Exception as e:
-                            show_error_and_stop(f"Failed to record transfer: {e}")
+                            show_error_and_stop(f"Failed to compute source barrel remaining weight: {e}")
+                            remaining = 0
+
+                        if remaining <= 0:
+                            st.warning(
+                                "Source barrel has no remaining weight to transfer."
+                            )
+                        else:
+                            try:
+                                note_clean = transfer_notes.strip()[:500]
+                                record_transaction(
+                                    spreadsheet,
+                                    barrel["barrel_id"],
+                                    qr_param,
+                                    TXN_TRANSFER_OUT,
+                                    "",
+                                    -float(remaining),
+                                    dest_barrel["barrel_id"],
+                                    note_clean,
+                                )
+                                record_transaction(
+                                    spreadsheet,
+                                    dest_barrel["barrel_id"],
+                                    dest_qr_final,
+                                    TXN_TRANSFER_IN,
+                                    "",
+                                    float(remaining),
+                                    barrel["barrel_id"],
+                                    note_clean,
+                                )
+                                deactivate_barrel(spreadsheet, qr_param)
+                                get_barrels_df.clear()
+                                st.session_state["barrel_transfer_mode"] = False
+                                st.session_state["_clear_dest_qr_input"] = True
+                                st.session_state["last_transfer_done"] = {
+                                    "source_variety": barrel["variety"],
+                                    "source_barrel_number": barrel["barrel_number"],
+                                    "dest_variety": dest_barrel["variety"],
+                                    "dest_barrel_number": dest_barrel["barrel_number"],
+                                    "weight_lbs": remaining,
+                                }
+                                st.balloons()
+                                st.rerun()
+                            except Exception as e:
+                                show_error_and_stop(f"Failed to record transfer: {e}")
 
             if st.button("Cancel Transfer", use_container_width=True, key="cancel_transfer_btn"):
                 st.session_state["barrel_transfer_mode"] = False
@@ -615,12 +690,14 @@ if qr_param:
                     st.warning("Please enter a weight greater than 0.")
                 else:
                     try:
-                        record_withdrawal(
+                        record_transaction(
                             spreadsheet,
                             barrel["barrel_id"],
                             qr_param,
+                            TXN_WITHDRAWAL,
                             product_type,
-                            weight_lbs,
+                            -float(weight_lbs),
+                            "",
                             "",
                         )
                         st.session_state["last_withdrawal_done"] = True
@@ -766,14 +843,7 @@ if qr_param:
                         variety,
                         new_date_str,
                         int(barrel_num),
-                    )
-                    record_withdrawal(
-                        spreadsheet,
-                        new_barrel_id,
-                        qr_param,
-                        "Starting Weight",
-                        starting_weight,
-                        "Initial barrel weight",
+                        float(starting_weight),
                     )
                     get_barrels_df.clear()
                     st.success(f"QR code assigned to new barrel **{new_barrel_id}**.")
@@ -904,7 +974,10 @@ else:
                     active_df["variety"].str.contains(variety_filter.strip(), case=False, na=False, regex=False)
                 ].reset_index(drop=True)
 
-            display_cols = ["barrel_id", "variety", "date_created", "barrel_number", "qr_code_id", "assigned_date"]
+            display_cols = ["barrel_id", "variety", "date_created", "barrel_number", "qr_code_id", "assigned_date", "starting_weight_lbs"]
+            for col in display_cols:
+                if col not in active_df.columns:
+                    active_df[col] = ""
             selection = st.dataframe(
                 active_df[display_cols],
                 use_container_width=True,
@@ -966,6 +1039,15 @@ else:
             new_date = st.date_input("New Date", value=date.today(), key="reassign_date")
             new_date_str = new_date.strftime("%Y-%m-%d")
 
+            new_starting_weight = st.number_input(
+                "Starting Weight (lbs) *",
+                min_value=0.0,
+                step=0.1,
+                format="%.1f",
+                value=None,
+                key="reassign_starting_weight",
+            )
+
             new_barrel_num = 1
             try:
                 new_barrel_num = get_next_barrel_number(spreadsheet, new_variety, new_date_str)
@@ -975,19 +1057,23 @@ else:
             st.info(f"New barrel number: **{new_barrel_num}** (auto-assigned)")
 
             if st.button("Reassign", use_container_width=True):
-                try:
-                    new_barrel_id = reassign_qr(
-                        spreadsheet,
-                        current["qr_code_id"],
-                        new_variety,
-                        new_date_str,
-                        int(new_barrel_num),
-                    )
-                    get_barrels_df.clear()
-                    st.success(f"QR **{current['qr_code_id']}** reassigned to new barrel **{new_barrel_id}**.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to reassign: {e}")
+                if new_starting_weight is None or new_starting_weight <= 0:
+                    st.warning("Please enter a starting weight greater than 0.")
+                else:
+                    try:
+                        new_barrel_id = reassign_qr(
+                            spreadsheet,
+                            current["qr_code_id"],
+                            new_variety,
+                            new_date_str,
+                            int(new_barrel_num),
+                            float(new_starting_weight),
+                        )
+                        get_barrels_df.clear()
+                        st.success(f"QR **{current['qr_code_id']}** reassigned to new barrel **{new_barrel_id}**.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to reassign: {e}")
 
     st.markdown("---")
     st.caption(f"v{APP_VERSION}")
