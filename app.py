@@ -441,13 +441,13 @@ if qr_param:
         # ----------------------------------------
         # WORKFLOW 2: Record a withdrawal
         # ----------------------------------------
-        header_left, header_right = st.columns([3, 1])
-        with header_right:
+        top_spacer, top_btn = st.columns([3, 1])
+        with top_btn:
             if st.button("Scan New", use_container_width=True, key="scan_new_btn"):
                 st.session_state["scan_new_mode"] = True
                 st.rerun()
-        with header_left:
-            st.subheader(barrel["variety"])
+
+        st.subheader(barrel["variety"])
         st.caption(
             f"Barrel #{barrel['barrel_number']} • Created {barrel['date_created']}"
         )
